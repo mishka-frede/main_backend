@@ -8,6 +8,7 @@ from app.models.comment import Comment
 from app.models.ticket_link import TicketLink
 from app.models.notification import Notification
 from app.models.ticket_action_log import TicketActionLog
+from app.models.ticket_merge_history import TicketMergeHistory
 from app.models.ticket_feedback import TicketFeedback
 from app.models.ticket_feedback import TicketFeedbackAttachment
 from app.models.ticket_status_history import TicketStatusHistory

@@ -80,6 +80,7 @@ def register(
     address = Address(
         street=user.street,
         house=user.house,
+        entrance=user.entrance,
         apartment=user.apartment,
         personal_account=user.personal_account
     )

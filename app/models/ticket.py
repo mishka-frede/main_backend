@@ -47,6 +47,12 @@ class Ticket(Base):
         nullable=True
     )
 
+    assigned_executor_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True
+    )
+
     completed_at = Column(DateTime, nullable=True)
 
     address = relationship(
@@ -54,7 +60,15 @@ class Ticket(Base):
         back_populates="tickets"
     )
 
-    resident = relationship("User")
+    resident = relationship(
+        "User",
+        foreign_keys=[resident_id]
+    )
+
+    assigned_executor = relationship(
+        "User",
+        foreign_keys=[assigned_executor_id]
+    )
 
     category = relationship("Category")
 
@@ -67,5 +81,12 @@ class Ticket(Base):
     feedback_entries = relationship(
         "TicketFeedback",
         back_populates="ticket",
+        cascade="all, delete-orphan"
+    )
+
+    merge_history = relationship(
+        "TicketMergeHistory",
+        foreign_keys="TicketMergeHistory.primary_ticket_id",
+        back_populates="primary_ticket",
         cascade="all, delete-orphan"
     )

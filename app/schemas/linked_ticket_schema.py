@@ -81,6 +81,13 @@ class TicketMergeRequest(BaseModel):
 
     secondary_ticket_id: int
 
+    reason: str | None = None
+
+
+class TicketExecutorAssignRequest(BaseModel):
+
+    executor_id: int | None = None
+
 
 class NotificationResponse(BaseModel):
 

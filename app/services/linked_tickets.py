@@ -125,7 +125,8 @@ def get_active_ticket_candidates(
 
         query = query.filter(
             Address.street == address.street,
-            Address.house == address.house
+            Address.house == address.house,
+            Address.entrance == address.entrance
         )
 
     else:

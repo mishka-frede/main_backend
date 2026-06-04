@@ -21,6 +21,8 @@ class UserCreate(BaseModel):
 
     house: str
 
+    entrance: str
+
     apartment: str
 
     personal_account: str

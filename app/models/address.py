@@ -17,6 +17,8 @@ class Address(Base):
 
     house = Column(String(50))
 
+    entrance = Column(String(50))
+
     apartment = Column(String(50))
 
     personal_account = Column(String(100))

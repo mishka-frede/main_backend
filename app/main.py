@@ -20,6 +20,7 @@ from app.models.user_address import UserAddress
 from app.models.ticket_link import TicketLink
 from app.models.notification import Notification
 from app.models.ticket_action_log import TicketActionLog
+from app.models.ticket_merge_history import TicketMergeHistory
 from app.models.ticket_feedback import TicketFeedback
 from app.models.ticket_feedback import TicketFeedbackAttachment
 
@@ -84,6 +85,17 @@ def ensure_schema_updates():
                     )
                 )
 
+        if "entrance" not in columns:
+
+            with engine.begin() as connection:
+
+                connection.execute(
+                    text(
+                        "ALTER TABLE addresses "
+                        "ADD COLUMN entrance VARCHAR(50)"
+                    )
+                )
+
     if inspector.has_table("tickets"):
 
         ticket_columns = {
@@ -104,12 +116,18 @@ def ensure_schema_updates():
 
         if "completed_at" not in ticket_columns:
 
+            completed_at_type = (
+                "TIMESTAMP"
+                if engine.dialect.name == "postgresql"
+                else "DATETIME"
+            )
+
             with engine.begin() as connection:
 
                 connection.execute(
                     text(
                         "ALTER TABLE tickets "
-                        "ADD COLUMN completed_at DATETIME NULL"
+                        f"ADD COLUMN completed_at {completed_at_type} NULL"
                     )
                 )
 

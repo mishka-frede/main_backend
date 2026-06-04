@@ -14,6 +14,10 @@ class CommentResponse(BaseModel):
 
     user_id: int
 
+    author_name: str | None = None
+
+    author_role: str | None = None
+
     class Config:
 
         from_attributes = True

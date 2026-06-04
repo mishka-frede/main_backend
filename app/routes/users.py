@@ -93,6 +93,38 @@ def get_staff_users(
     ]
 
 
+@router.get("/executors")
+def get_executor_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    if current_user.role not in {"admin", "dispatcher"}:
+
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied"
+        )
+
+    users = db.query(User).filter(
+        User.role == "executor",
+        User.is_active == True
+    ).order_by(
+        User.full_name
+    ).all()
+
+    return [
+        {
+            "id": user.id,
+            "full_name": user.full_name,
+            "email": user.email,
+            "phone": user.phone,
+            "role": user.role
+        }
+        for user in users
+    ]
+
+
 @router.post("/staff")
 def create_staff_user(
     data: StaffUserCreate,
@@ -281,6 +313,8 @@ def get_profile(
             address.street if address else "",
         "house":
             address.house if address else "",
+        "entrance":
+            address.entrance if address else "",
         "apartment":
             address.apartment if address else ""
     }

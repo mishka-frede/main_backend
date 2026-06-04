@@ -45,6 +45,7 @@ def serialize_user_address(link: UserAddress):
         "address_id": link.address_id,
         "street": address.street,
         "house": address.house,
+        "entrance": address.entrance,
         "apartment": address.apartment,
         "personal_account": address.personal_account,
         "is_primary": link.is_primary,
@@ -134,6 +135,7 @@ def add_my_address(
     required_fields = [
         "street",
         "house",
+        "entrance",
         "apartment",
         "personal_account"
     ]
@@ -154,6 +156,7 @@ def add_my_address(
     address = Address(
         street=data["street"],
         house=data["house"],
+        entrance=data["entrance"],
         apartment=data["apartment"],
         personal_account=data["personal_account"]
     )
@@ -193,6 +196,7 @@ def update_my_address(
 
     link.address.street = data["street"]
     link.address.house = data["house"]
+    link.address.entrance = data["entrance"]
     link.address.apartment = data["apartment"]
     link.address.personal_account = data["personal_account"]
     link.is_verified = False

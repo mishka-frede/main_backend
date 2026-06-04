@@ -7,8 +7,8 @@ Backend реализует REST API для веб-системы ТСЖ: рег�
 - Python
 - FastAPI
 - SQLAlchemy
-- MySQL
-- PyMySQL
+- PostgreSQL
+- psycopg2
 - JWT
 - Passlib / bcrypt
 - python-dotenv
@@ -22,30 +22,35 @@ cd D:\Python_project\dimas\main_backend
 ..\ .venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-2. Создать базу MySQL, например:
+2. Создать базу PostgreSQL, например:
 
 ```sql
-CREATE DATABASE IF NOT EXISTS tszh_db
-CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE tszh_db
+WITH ENCODING 'UTF8';
 ```
 
 3. Заполнить `.env`:
 
 ```env
-DB_USER=root
-DB_PASSWORD=root
+DB_USER=postgres
+DB_PASSWORD=1234
 DB_HOST=localhost
-DB_PORT=3306
+DB_PORT=5432
 DB_NAME=tszh_db
 
-DATABASE_URL=mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+DATABASE_URL=postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 ```
 
 4. Запустить API:
 
 ```powershell
 python -m uvicorn app.main:app --reload
+```
+
+Перед запуском после изменений схемы выполнить миграции:
+
+```powershell
+python -m alembic upgrade head
 ```
 
 API будет доступен по адресу:
@@ -62,7 +67,13 @@ http://127.0.0.1:8000/docs
 
 ## База данных
 
-Проект пока не использует Alembic. Таблицы создаются при старте приложения через:
+Проект использует Alembic для изменений схемы:
+
+```powershell
+python -m alembic upgrade head
+```
+
+Для совместимости с локальной разработкой таблицы также создаются при старте приложения через:
 
 ```python
 Base.metadata.create_all(bind=engine)
@@ -73,6 +84,8 @@ Base.metadata.create_all(bind=engine)
 - добавляется колонка `personal_account` в `addresses`, если ее еще нет;
 - создаются базовые роли;
 - старые адреса из `users.address_id` переносятся в `user_addresses`.
+- заявки можно назначать исполнителям;
+- ручные объединения заявок сохраняются в истории `ticket_merge_history`.
 
 ## Основные таблицы
 

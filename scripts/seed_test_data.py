@@ -71,6 +71,27 @@ USERS = [
         "role": "executor",
     },
     {
+        "email": "plumber@example.com",
+        "password": TEST_PASSWORD,
+        "full_name": "Смирнов Сергей",
+        "phone": "+7 900 000-00-04",
+        "role": "executor",
+    },
+    {
+        "email": "electrician@example.com",
+        "password": TEST_PASSWORD,
+        "full_name": "Васильев Николай",
+        "phone": "+7 900 000-00-05",
+        "role": "executor",
+    },
+    {
+        "email": "lift@example.com",
+        "password": TEST_PASSWORD,
+        "full_name": "Морозов Андрей",
+        "phone": "+7 900 000-00-06",
+        "role": "executor",
+    },
+    {
         "email": "resident1@example.com",
         "password": TEST_PASSWORD,
         "full_name": "Сидоров Иван",
@@ -98,6 +119,7 @@ ADDRESSES = [
         "key": "lenina-10-5",
         "street": "ул. Ленина",
         "house": "10",
+        "entrance": "1",
         "apartment": "5",
         "personal_account": "10000005",
     },
@@ -105,6 +127,7 @@ ADDRESSES = [
         "key": "lenina-10-12",
         "street": "ул. Ленина",
         "house": "10",
+        "entrance": "2",
         "apartment": "12",
         "personal_account": "10000012",
     },
@@ -112,6 +135,7 @@ ADDRESSES = [
         "key": "mira-3-1",
         "street": "ул. Мира",
         "house": "3",
+        "entrance": "1",
         "apartment": "1",
         "personal_account": "20000001",
     },
@@ -252,18 +276,36 @@ def get_or_create_address(db, spec: dict) -> Address:
         .filter(
             Address.street == spec["street"],
             Address.house == spec["house"],
+            Address.entrance == spec["entrance"],
             Address.apartment == spec["apartment"],
         )
         .first()
     )
 
+    if not address:
+
+        address = (
+            db.query(Address)
+            .filter(
+                Address.street == spec["street"],
+                Address.house == spec["house"],
+                Address.apartment == spec["apartment"],
+            )
+            .first()
+        )
+
     if address:
+
+        address.entrance = spec["entrance"]
+        address.personal_account = spec.get("personal_account")
+        db.commit()
 
         return address
 
     address = Address(
         street=spec["street"],
         house=spec["house"],
+        entrance=spec["entrance"],
         apartment=spec["apartment"],
         personal_account=spec.get("personal_account"),
     )
@@ -449,6 +491,9 @@ def print_accounts() -> None:
         ("admin@example.com", ADMIN_PASSWORD, "admin", "Админ-панель, сотрудники"),
         ("dispatcher@example.com", TEST_PASSWORD, "dispatcher", "Диспетчер, заявки, адреса на проверке"),
         ("executor@example.com", TEST_PASSWORD, "executor", "Исполнитель"),
+        ("plumber@example.com", TEST_PASSWORD, "executor", "Исполнитель: сантехник"),
+        ("electrician@example.com", TEST_PASSWORD, "executor", "Исполнитель: электрик"),
+        ("lift@example.com", TEST_PASSWORD, "executor", "Исполнитель: лифты"),
         ("resident1@example.com", TEST_PASSWORD, "resident", "Жилец, ул. Ленина 10-5"),
         ("resident2@example.com", TEST_PASSWORD, "resident", "Жилец, ул. Ленина 10-12"),
         ("resident3@example.com", TEST_PASSWORD, "resident", "Жилец, адрес на проверке (ул. Мира 3-1)"),

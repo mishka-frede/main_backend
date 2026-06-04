@@ -12,6 +12,7 @@ from app.models.comment import Comment
 from app.models.category import Category
 from app.models.user_address import UserAddress
 from app.models.ticket_link import TicketLink
+from app.models.ticket_merge_history import TicketMergeHistory
 from app.models.user import User
 
 from app.schemas.ticket_schema import TicketResponse
@@ -21,6 +22,7 @@ from app.schemas.linked_ticket_schema import (
     CheckSimilarResponse,
     SimilarTicketMatch,
     TicketCreateWithOptions,
+    TicketExecutorAssignRequest,
     TicketJoinRequest,
     TicketMergeRequest,
     TicketSubscriberDispatcherResponse,
@@ -45,6 +47,13 @@ router = APIRouter(
     prefix="/tickets",
     tags=["Tickets"]
 )
+
+PRIORITY_LABELS = {
+    "low": "Низкий",
+    "medium": "Средний",
+    "high": "Высокий",
+    "urgent": "Срочный",
+}
 
 
 def get_db():
@@ -107,6 +116,12 @@ def build_ticket_response(
         TicketLink.ticket_id == ticket.id
     ).count()
 
+    merge_entries = db.query(TicketMergeHistory).filter(
+        TicketMergeHistory.primary_ticket_id == ticket.id
+    ).order_by(
+        TicketMergeHistory.created_at.desc()
+    ).all()
+
     is_creator = False
     is_linked = False
 
@@ -127,7 +142,7 @@ def build_ticket_response(
         "id": ticket.id,
         "description": ticket.description,
         "status": ticket.status,
-        "priority": ticket.priority,
+        "priority": PRIORITY_LABELS.get(ticket.priority, ticket.priority),
         "resident_id": ticket.resident_id,
         "category_id": ticket.category_id,
         "created_at": ticket.created_at,
@@ -136,6 +151,29 @@ def build_ticket_response(
         "is_linked": is_linked,
         "address": ticket.address,
         "category": ticket.category,
+        "assigned_executor_id": ticket.assigned_executor_id,
+        "assigned_executor": ticket.assigned_executor,
+        "merge_history": [
+            {
+                "id": entry.id,
+                "primary_ticket_id": entry.primary_ticket_id,
+                "secondary_ticket_id": entry.secondary_ticket_id,
+                "merged_by_user_id": entry.merged_by_user_id,
+                "reason": entry.reason,
+                "created_at": entry.created_at,
+                "secondary_ticket_description": (
+                    entry.secondary_ticket.description
+                    if entry.secondary_ticket
+                    else None
+                ),
+                "merged_by_name": (
+                    entry.merged_by.full_name
+                    if entry.merged_by
+                    else None
+                )
+            }
+            for entry in merge_entries
+        ],
     }
 
 
@@ -155,7 +193,7 @@ def similar_match_to_schema(
         id=ticket.id,
         description=ticket.description,
         status=ticket.status,
-        priority=ticket.priority,
+        priority=PRIORITY_LABELS.get(ticket.priority, ticket.priority),
         category_id=ticket.category_id,
         category_name=category_name,
         created_at=ticket.created_at,
@@ -554,6 +592,15 @@ def merge_tickets(
 
     linked_service.recalculate_ticket_priority(db, primary)
 
+    db.add(
+        TicketMergeHistory(
+            primary_ticket_id=primary.id,
+            secondary_ticket_id=secondary.id,
+            merged_by_user_id=current_user.id,
+            reason=payload.reason
+        )
+    )
+
     linked_service.log_ticket_action(
         db,
         ticket_id=primary.id,
@@ -576,6 +623,90 @@ def merge_tickets(
         "primary_ticket_id": primary.id,
         "archived_ticket_id": secondary.id
     }
+
+
+@router.patch(
+    "/{ticket_id}/executor",
+    response_model=TicketResponse
+)
+def assign_ticket_executor(
+    ticket_id: int,
+    payload: TicketExecutorAssignRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+
+    require_dispatcher(current_user)
+
+    ticket = db.query(Ticket).options(
+        joinedload(Ticket.address),
+        joinedload(Ticket.category),
+        joinedload(Ticket.assigned_executor)
+    ).filter(
+        Ticket.id == ticket_id,
+        Ticket.merged_into_id.is_(None)
+    ).first()
+
+    if not ticket:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found"
+        )
+
+    if payload.executor_id is None:
+
+        ticket.assigned_executor_id = None
+
+        linked_service.log_ticket_action(
+            db,
+            ticket_id=ticket.id,
+            user_id=current_user.id,
+            action="executor_unassigned",
+            details="Исполнитель снят"
+        )
+
+    else:
+
+        executor = db.query(User).filter(
+            User.id == payload.executor_id,
+            User.role == "executor",
+            User.is_active == True
+        ).first()
+
+        if not executor:
+
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid executor"
+            )
+
+        ticket.assigned_executor_id = executor.id
+
+        linked_service.log_ticket_action(
+            db,
+            ticket_id=ticket.id,
+            user_id=current_user.id,
+            action="executor_assigned",
+            details=f"Назначен исполнитель: {executor.full_name}"
+        )
+
+    db.commit()
+    db.refresh(ticket)
+
+    ticket = db.query(Ticket).options(
+        joinedload(Ticket.address),
+        joinedload(Ticket.category),
+        joinedload(Ticket.assigned_executor)
+    ).filter(
+        Ticket.id == ticket_id
+    ).first()
+
+    return build_ticket_response(
+        db,
+        ticket,
+        current_user
+    )
 
 
 @router.get(
@@ -851,9 +982,36 @@ def get_comments(
 
     comments = db.query(Comment).filter(
         Comment.ticket_id == ticket_id
+    ).order_by(
+        Comment.created_at.asc(),
+        Comment.id.asc()
     ).all()
 
-    return comments
+    users_by_id = {
+        user.id: user
+        for user in db.query(User).filter(
+            User.id.in_([comment.user_id for comment in comments])
+        ).all()
+    }
+
+    return [
+        {
+            "id": comment.id,
+            "text": comment.text,
+            "user_id": comment.user_id,
+            "author_name": (
+                users_by_id[comment.user_id].full_name
+                if comment.user_id in users_by_id
+                else None
+            ),
+            "author_role": (
+                users_by_id[comment.user_id].role
+                if comment.user_id in users_by_id
+                else None
+            ),
+        }
+        for comment in comments
+    ]
 
 
 @router.post(

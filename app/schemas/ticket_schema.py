@@ -22,6 +22,8 @@ class AddressResponse(BaseModel):
 
     house: str
 
+    entrance: str | None = None
+
     apartment: str
 
     personal_account: str | None = None
@@ -29,6 +31,40 @@ class AddressResponse(BaseModel):
     class Config:
 
         from_attributes = True
+
+
+class UserBrief(BaseModel):
+
+    id: int
+
+    full_name: str
+
+    email: str | None = None
+
+    role: str | None = None
+
+    class Config:
+
+        from_attributes = True
+
+
+class TicketMergeHistoryResponse(BaseModel):
+
+    id: int
+
+    primary_ticket_id: int
+
+    secondary_ticket_id: int
+
+    merged_by_user_id: int
+
+    reason: str | None = None
+
+    created_at: datetime
+
+    secondary_ticket_description: str | None = None
+
+    merged_by_name: str | None = None
 
 
 class TicketCreate(BaseModel):
@@ -65,6 +101,12 @@ class TicketResponse(BaseModel):
     address: AddressResponse | None = None
 
     category: CategoryBrief | None = None
+
+    assigned_executor_id: int | None = None
+
+    assigned_executor: UserBrief | None = None
+
+    merge_history: list[TicketMergeHistoryResponse] = []
 
     class Config:
 
