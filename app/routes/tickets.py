@@ -1,18 +1,26 @@
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
+from fastapi.responses import Response
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
+from sqlalchemy import or_
+
+import csv
+from io import StringIO
 
 from app.db.database import SessionLocal
 
 from app.models.ticket import Ticket
 from app.models.comment import Comment
 from app.models.category import Category
+from app.models.address import Address
 from app.models.user_address import UserAddress
 from app.models.ticket_link import TicketLink
 from app.models.ticket_merge_history import TicketMergeHistory
+from app.models.ticket_action_log import TicketActionLog
 from app.models.user import User
 
 from app.schemas.ticket_schema import TicketResponse
@@ -23,6 +31,8 @@ from app.schemas.linked_ticket_schema import (
     SimilarTicketMatch,
     TicketCreateWithOptions,
     TicketExecutorAssignRequest,
+    TicketExecutorReportRequest,
+    TicketExecutorStatusRequest,
     TicketJoinRequest,
     TicketMergeRequest,
     TicketSubscriberDispatcherResponse,
@@ -54,6 +64,111 @@ PRIORITY_LABELS = {
     "high": "Высокий",
     "urgent": "Срочный",
 }
+
+
+def normalize_search(value: str | None) -> str | None:
+
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    return value or None
+
+
+def normalize_merge_reason(value: str) -> str:
+
+    reason = value.strip()
+
+    if not reason:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Merge reason is required"
+        )
+
+    return reason
+
+
+def apply_ticket_filters(
+    query,
+    status: str | None = None,
+    priority: str | None = None,
+    category_id: int | None = None,
+    address_id: int | None = None,
+    assigned_executor_id: int | None = None,
+    search: str | None = None
+):
+
+    if status:
+        query = query.filter(Ticket.status == status)
+
+    if priority:
+        query = query.filter(Ticket.priority == priority)
+
+    if category_id is not None:
+        query = query.filter(Ticket.category_id == category_id)
+
+    if address_id is not None:
+        query = query.filter(Ticket.address_id == address_id)
+
+    if assigned_executor_id is not None:
+        query = query.filter(
+            Ticket.assigned_executor_id == assigned_executor_id
+        )
+
+    search = normalize_search(search)
+
+    if search:
+
+        pattern = f"%{search}%"
+
+        query = query.filter(
+            or_(
+                Ticket.description.ilike(pattern),
+                Category.name.ilike(pattern),
+                Address.street.ilike(pattern),
+                Address.house.ilike(pattern),
+                Address.apartment.ilike(pattern),
+                User.full_name.ilike(pattern),
+                User.email.ilike(pattern)
+            )
+        )
+
+    return query
+
+
+def ticket_report_row(
+    db: Session,
+    ticket: Ticket
+) -> dict:
+
+    subscribers_count = db.query(TicketLink).filter(
+        TicketLink.ticket_id == ticket.id
+    ).count()
+
+    return {
+        "id": ticket.id,
+        "status": ticket.status,
+        "priority": ticket.priority,
+        "category": ticket.category.name if ticket.category else "",
+        "description": ticket.description,
+        "address": (
+            f"{ticket.address.street}, d. {ticket.address.house}, "
+            f"entrance {ticket.address.entrance or '-'}, "
+            f"apt. {ticket.address.apartment}"
+            if ticket.address
+            else ""
+        ),
+        "resident": ticket.resident.full_name if ticket.resident else "",
+        "executor": (
+            ticket.assigned_executor.full_name
+            if ticket.assigned_executor
+            else ""
+        ),
+        "subscribers_count": subscribers_count,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else "",
+    }
 
 
 def get_db():
@@ -458,6 +573,12 @@ def join_existing_ticket(
     response_model=list[TicketResponse]
 )
 def get_my_tickets(
+    status: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    category_id: int | None = Query(default=None),
+    address_id: int | None = Query(default=None),
+    assigned_executor_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
@@ -470,13 +591,38 @@ def get_my_tickets(
     if not ticket_ids:
         return []
 
-    tickets = db.query(Ticket).options(
+    query = db.query(Ticket).options(
         joinedload(Ticket.address),
-        joinedload(Ticket.category)
+        joinedload(Ticket.category),
+        joinedload(Ticket.assigned_executor)
+    ).join(
+        Category,
+        Ticket.category_id == Category.id,
+        isouter=True
+    ).join(
+        Address,
+        Ticket.address_id == Address.id,
+        isouter=True
+    ).join(
+        User,
+        Ticket.resident_id == User.id,
+        isouter=True
     ).filter(
         Ticket.id.in_(ticket_ids),
         Ticket.merged_into_id.is_(None)
-    ).order_by(
+    )
+
+    query = apply_ticket_filters(
+        query,
+        status=status,
+        priority=priority,
+        category_id=category_id,
+        address_id=address_id,
+        assigned_executor_id=assigned_executor_id,
+        search=search
+    )
+
+    tickets = query.order_by(
         Ticket.created_at.desc()
     ).all()
 
@@ -491,18 +637,49 @@ def get_my_tickets(
     response_model=list[TicketResponse]
 )
 def get_all_tickets(
+    status: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    category_id: int | None = Query(default=None),
+    address_id: int | None = Query(default=None),
+    assigned_executor_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
 
     require_dispatcher(current_user)
 
-    tickets = db.query(Ticket).options(
+    query = db.query(Ticket).options(
         joinedload(Ticket.address),
-        joinedload(Ticket.category)
+        joinedload(Ticket.category),
+        joinedload(Ticket.assigned_executor)
+    ).join(
+        Category,
+        Ticket.category_id == Category.id,
+        isouter=True
+    ).join(
+        Address,
+        Ticket.address_id == Address.id,
+        isouter=True
+    ).join(
+        User,
+        Ticket.resident_id == User.id,
+        isouter=True
     ).filter(
         Ticket.merged_into_id.is_(None)
-    ).order_by(
+    )
+
+    query = apply_ticket_filters(
+        query,
+        status=status,
+        priority=priority,
+        category_id=category_id,
+        address_id=address_id,
+        assigned_executor_id=assigned_executor_id,
+        search=search
+    )
+
+    tickets = query.order_by(
         Ticket.created_at.desc()
     ).all()
 
@@ -510,6 +687,210 @@ def get_all_tickets(
         build_ticket_response(db, ticket, current_user)
         for ticket in tickets
     ]
+
+
+@router.get(
+    "/assigned-to-me",
+    response_model=list[TicketResponse]
+)
+def get_assigned_to_me_tickets(
+    status: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    category_id: int | None = Query(default=None),
+    address_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+
+    if current_user.role != "executor":
+
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied"
+        )
+
+    query = db.query(Ticket).options(
+        joinedload(Ticket.address),
+        joinedload(Ticket.category),
+        joinedload(Ticket.assigned_executor)
+    ).join(
+        Category,
+        Ticket.category_id == Category.id,
+        isouter=True
+    ).join(
+        Address,
+        Ticket.address_id == Address.id,
+        isouter=True
+    ).join(
+        User,
+        Ticket.resident_id == User.id,
+        isouter=True
+    ).filter(
+        Ticket.assigned_executor_id == current_user.id,
+        Ticket.merged_into_id.is_(None)
+    )
+
+    query = apply_ticket_filters(
+        query,
+        status=status,
+        priority=priority,
+        category_id=category_id,
+        address_id=address_id,
+        search=search
+    )
+
+    tickets = query.order_by(
+        Ticket.created_at.desc()
+    ).all()
+
+    return [
+        build_ticket_response(db, ticket, current_user)
+        for ticket in tickets
+    ]
+
+
+@router.get("/action-log")
+def get_action_log(
+    ticket_id: int | None = Query(default=None),
+    user_id: int | None = Query(default=None),
+    action: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+
+    require_dispatcher(current_user)
+
+    query = db.query(TicketActionLog).order_by(
+        TicketActionLog.created_at.desc(),
+        TicketActionLog.id.desc()
+    )
+
+    if ticket_id is not None:
+        query = query.filter(TicketActionLog.ticket_id == ticket_id)
+
+    if user_id is not None:
+        query = query.filter(TicketActionLog.user_id == user_id)
+
+    if action:
+        query = query.filter(TicketActionLog.action == action)
+
+    entries = query.limit(limit).all()
+
+    user_ids = {
+        entry.user_id
+        for entry in entries
+        if entry.user_id is not None
+    }
+
+    users_by_id = {
+        user.id: user
+        for user in db.query(User).filter(User.id.in_(user_ids)).all()
+    } if user_ids else {}
+
+    return [
+        {
+            "id": entry.id,
+            "ticket_id": entry.ticket_id,
+            "user_id": entry.user_id,
+            "user_name": (
+                users_by_id[entry.user_id].full_name
+                if entry.user_id in users_by_id
+                else None
+            ),
+            "user_role": (
+                users_by_id[entry.user_id].role
+                if entry.user_id in users_by_id
+                else None
+            ),
+            "action": entry.action,
+            "details": entry.details,
+            "created_at": entry.created_at,
+        }
+        for entry in entries
+    ]
+
+
+@router.get("/export")
+def export_tickets_report(
+    status: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    category_id: int | None = Query(default=None),
+    address_id: int | None = Query(default=None),
+    assigned_executor_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+
+    require_dispatcher(current_user)
+
+    query = db.query(Ticket).options(
+        joinedload(Ticket.address),
+        joinedload(Ticket.category),
+        joinedload(Ticket.resident),
+        joinedload(Ticket.assigned_executor)
+    ).join(
+        Category,
+        Ticket.category_id == Category.id,
+        isouter=True
+    ).join(
+        Address,
+        Ticket.address_id == Address.id,
+        isouter=True
+    ).join(
+        User,
+        Ticket.resident_id == User.id,
+        isouter=True
+    ).filter(
+        Ticket.merged_into_id.is_(None)
+    )
+
+    query = apply_ticket_filters(
+        query,
+        status=status,
+        priority=priority,
+        category_id=category_id,
+        address_id=address_id,
+        assigned_executor_id=assigned_executor_id,
+        search=search
+    )
+
+    tickets = query.order_by(
+        Ticket.created_at.desc()
+    ).all()
+
+    buffer = StringIO()
+    fieldnames = [
+        "id",
+        "status",
+        "priority",
+        "category",
+        "description",
+        "address",
+        "resident",
+        "executor",
+        "subscribers_count",
+        "created_at",
+    ]
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+
+    for ticket in tickets:
+        writer.writerow(ticket_report_row(db, ticket))
+
+    buffer.seek(0)
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename=tickets-report.csv"
+            )
+        }
+    )
 
 
 @router.post(
@@ -522,6 +903,8 @@ def merge_tickets(
 ):
 
     require_dispatcher(current_user)
+
+    reason = normalize_merge_reason(payload.reason)
 
     primary = db.query(Ticket).filter(
         Ticket.id == payload.primary_ticket_id
@@ -597,7 +980,7 @@ def merge_tickets(
             primary_ticket_id=primary.id,
             secondary_ticket_id=secondary.id,
             merged_by_user_id=current_user.id,
-            reason=payload.reason
+            reason=reason
         )
     )
 
@@ -606,7 +989,10 @@ def merge_tickets(
         ticket_id=primary.id,
         user_id=current_user.id,
         action="tickets_merged",
-        details=f"Заявка #{secondary.id} объединена в #{primary.id}"
+        details=(
+            f"Заявка #{secondary.id} объединена в #{primary.id}. "
+            f"Reason: {reason}"
+        )
     )
 
     linked_service.notify_ticket_subscribers(
@@ -945,6 +1331,141 @@ def change_ticket_status(
 
     return {
         "message": "Status updated"
+    }
+
+
+@router.patch(
+    "/{ticket_id}/executor-status",
+    response_model=TicketResponse
+)
+def change_assigned_ticket_status(
+    ticket_id: int,
+    payload: TicketExecutorStatusRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+
+    if current_user.role != "executor":
+
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied"
+        )
+
+    if payload.status not in {"in_progress", "completed"}:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid status"
+        )
+
+    ticket = db.query(Ticket).options(
+        joinedload(Ticket.address),
+        joinedload(Ticket.category),
+        joinedload(Ticket.assigned_executor)
+    ).filter(
+        Ticket.id == ticket_id,
+        Ticket.assigned_executor_id == current_user.id,
+        Ticket.merged_into_id.is_(None)
+    ).first()
+
+    if not ticket:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found"
+        )
+
+    old_status = ticket.status
+    ticket.status = payload.status
+
+    if payload.status == "completed" and old_status != "completed":
+        feedback_service.on_ticket_completed(db, ticket)
+
+    linked_service.notify_status_change(
+        db,
+        ticket=ticket,
+        old_status=old_status,
+        changed_by_user_id=current_user.id
+    )
+
+    linked_service.log_ticket_action(
+        db,
+        ticket_id=ticket.id,
+        user_id=current_user.id,
+        action="executor_status_changed",
+        details=f"{old_status} -> {payload.status}"
+    )
+
+    db.commit()
+    db.refresh(ticket)
+
+    return build_ticket_response(
+        db,
+        ticket,
+        current_user
+    )
+
+
+@router.post(
+    "/{ticket_id}/executor-report"
+)
+def add_executor_report(
+    ticket_id: int,
+    payload: TicketExecutorReportRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+
+    if current_user.role != "executor":
+
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied"
+        )
+
+    ticket = db.query(Ticket).filter(
+        Ticket.id == ticket_id,
+        Ticket.assigned_executor_id == current_user.id,
+        Ticket.merged_into_id.is_(None)
+    ).first()
+
+    if not ticket:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found"
+        )
+
+    report_text = payload.text.strip()
+
+    if not report_text:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Report text is required"
+        )
+
+    db.add(
+        Comment(
+            text=f"Отчет исполнителя: {report_text}",
+            ticket_id=ticket.id,
+            user_id=current_user.id
+        )
+    )
+
+    linked_service.log_ticket_action(
+        db,
+        ticket_id=ticket.id,
+        user_id=current_user.id,
+        action="executor_report_added",
+        details=report_text
+    )
+
+    db.commit()
+
+    return {
+        "message": "Executor report added"
     }
 
 

@@ -1,8 +1,13 @@
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 
 from fastapi.security import OAuth2PasswordRequestForm
+
+from collections import defaultdict
+from time import monotonic
+import os
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +19,7 @@ from app.models.role import Role
 from app.models.user_address import UserAddress
 
 from app.schemas.user_schema import UserCreate
+from app.schemas.user_schema import UserLogin
 
 from app.security.hashing import hash_password
 from app.security.hashing import verify_password
@@ -26,6 +32,16 @@ router = APIRouter(
     tags=["Auth"]
 )
 
+LOGIN_RATE_LIMIT_ATTEMPTS = int(
+    os.getenv("LOGIN_RATE_LIMIT_ATTEMPTS", "5")
+)
+
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(
+    os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
+)
+
+_login_attempts = defaultdict(list)
+
 
 def get_db():
 
@@ -36,6 +52,55 @@ def get_db():
 
     finally:
         db.close()
+
+
+def _login_rate_key(request: Request, email: str) -> str:
+
+    client_host = request.client.host if request.client else "unknown"
+
+    return f"{client_host}:{email.lower()}"
+
+
+def _prune_attempts(key: str, now: float):
+
+    window_started_at = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
+
+    _login_attempts[key] = [
+        attempt_at
+        for attempt_at in _login_attempts[key]
+        if attempt_at >= window_started_at
+    ]
+
+
+def ensure_login_not_rate_limited(request: Request, email: str):
+
+    now = monotonic()
+    key = _login_rate_key(request, email)
+
+    _prune_attempts(key, now)
+
+    if len(_login_attempts[key]) >= LOGIN_RATE_LIMIT_ATTEMPTS:
+
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Try again later."
+        )
+
+
+def register_failed_login(request: Request, email: str):
+
+    now = monotonic()
+    key = _login_rate_key(request, email)
+
+    _prune_attempts(key, now)
+    _login_attempts[key].append(now)
+
+
+def clear_failed_logins(request: Request, email: str):
+
+    key = _login_rate_key(request, email)
+
+    _login_attempts.pop(key, None)
 
 
 @router.post("/register")
@@ -121,15 +186,34 @@ def register(
 
 @router.post("/login")
 def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
 
+    try:
+
+        login_data = UserLogin(
+            email=form_data.username,
+            password=form_data.password
+        )
+
+    except ValueError:
+
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid login data"
+        )
+
+    ensure_login_not_rate_limited(request, login_data.email)
+
     db_user = db.query(User).filter(
-        User.email == form_data.username
+        User.email == login_data.email
     ).first()
 
     if not db_user:
+
+        register_failed_login(request, login_data.email)
 
         raise HTTPException(
             status_code=401,
@@ -137,16 +221,20 @@ def login(
         )
 
     valid_password = verify_password(
-        form_data.password[:72],
+        login_data.password[:72],
         db_user.password_hash
     )
 
     if not valid_password:
 
+        register_failed_login(request, login_data.email)
+
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials"
         )
+
+    clear_failed_logins(request, login_data.email)
 
     access_token = create_access_token(
         data={

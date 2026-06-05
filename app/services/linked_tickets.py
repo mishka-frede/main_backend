@@ -213,6 +213,9 @@ def user_has_ticket_access(
     if ticket.resident_id == user.id:
         return True
 
+    if ticket.assigned_executor_id == user.id:
+        return True
+
     link = db.query(TicketLink).filter(
         TicketLink.ticket_id == ticket.id,
         TicketLink.user_id == user.id

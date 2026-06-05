@@ -10,9 +10,14 @@ from jose import jwt
 load_dotenv()
 
 SECRET_KEY = os.getenv(
-    "JWT_SECRET_KEY",
-    "SUPER_SECRET_KEY"
+    "JWT_SECRET_KEY"
 )
+
+if not SECRET_KEY:
+
+    raise RuntimeError(
+        "JWT_SECRET_KEY environment variable is required"
+    )
 
 ALGORITHM = "HS256"
 

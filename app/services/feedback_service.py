@@ -42,6 +42,9 @@ def user_can_leave_feedback(
     user: User
 ) -> bool:
 
+    if user.role != "resident":
+        return False
+
     if ticket.status not in FEEDBACK_ALLOWED_STATUSES:
         return False
 

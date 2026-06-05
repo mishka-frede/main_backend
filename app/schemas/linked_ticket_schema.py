@@ -81,12 +81,28 @@ class TicketMergeRequest(BaseModel):
 
     secondary_ticket_id: int
 
-    reason: str | None = None
+    reason: str = Field(
+        min_length=1,
+        max_length=1000
+    )
 
 
 class TicketExecutorAssignRequest(BaseModel):
 
     executor_id: int | None = None
+
+
+class TicketExecutorStatusRequest(BaseModel):
+
+    status: str
+
+
+class TicketExecutorReportRequest(BaseModel):
+
+    text: str = Field(
+        min_length=1,
+        max_length=1000
+    )
 
 
 class NotificationResponse(BaseModel):

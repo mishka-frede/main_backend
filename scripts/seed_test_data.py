@@ -37,7 +37,7 @@ from app.models.ticket import Ticket
 from app.security.hashing import hash_password
 from app.services import linked_tickets as linked_service
 
-TEST_PASSWORD = "test123"
+TEST_PASSWORD = "test1234"
 ADMIN_PASSWORD = "admin123"
 SEED_TAG = "[Тест]"
 
@@ -250,6 +250,14 @@ def get_or_create_user(db, spec: dict) -> User:
     user = db.query(User).filter(User.email == spec["email"]).first()
 
     if user:
+
+        user.full_name = spec["full_name"]
+        user.phone = spec.get("phone", "")
+        user.password_hash = hash_password(spec["password"])
+        user.role = spec["role"]
+        user.is_active = True
+        db.commit()
+        db.refresh(user)
 
         return user
 
@@ -484,7 +492,7 @@ def print_accounts() -> None:
 
     print()
     print("=" * 60)
-    print("Тестовые учётные записи (пароль test123, кроме admin)")
+    print("Тестовые учётные записи (пароль test1234, кроме admin)")
     print("=" * 60)
 
     rows = [
